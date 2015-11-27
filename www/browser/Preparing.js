@@ -57,7 +57,7 @@ if (!window.resolveLocalFileSystemURL) {
 // Resolves a filesystem entry by its path - which is passed either in standard (filesystem:file://) or
 // Cordova-specific (cdvfile://) universal way.
 // Aligns with specification: http://www.w3.org/TR/2011/WD-file-system-api-20110419/#widl-LocalFileSystem-resolveLocalFileSystemURL
-var nativeResolveLocalFileSystemURL = window.resolveLocalFileSystemURL || window.webkitResolveLocalFileSystemURL;
+var nativeResolveLocalFileSystemURL = window.webkitResolveLocalFileSystemURL || window.resolveLocalFileSystemURL;
 window.resolveLocalFileSystemURL = function(url, win, fail) {
     /* If url starts with `cdvfile` then we need convert it to Chrome real url first:
       cdvfile://localhost/persistent/path/to/file -> filesystem:file://persistent/path/to/file */

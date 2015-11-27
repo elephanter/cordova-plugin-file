@@ -31,8 +31,8 @@ var fileSystems = require('./fileSystems');
  * @param {DOMString} uri  URI referring to a local file or directory
  * @param successCallback  invoked with Entry object corresponding to URI
  * @param errorCallback    invoked if error occurs retrieving file system entry
- */
-module.exports.resolveLocalFileSystemURL = window.resolveLocalFileSystemURL || window.webkitResolveLocalFileSystemURL || function(uri, successCallback, errorCallback) {
+ *///
+module.exports.resolveLocalFileSystemURL = function(uri, successCallback, errorCallback) {
     argscheck.checkArgs('sFF', 'resolveLocalFileSystemURI', arguments);
     // error callback
     var fail = function(error) {
