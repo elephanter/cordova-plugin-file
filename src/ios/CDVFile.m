@@ -1,33 +1,53 @@
 /*
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
-  http://www.apache.org/licenses/LICENSE-2.0
+ http://www.apache.org/licenses/LICENSE-2.0
 
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
-*/
+ Unless required by applicable law or agreed to in writing,
+ software distributed under the License is distributed on an
+ "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ KIND, either express or implied.  See the License for the
+ specific language governing permissions and limitations
+ under the License.
+ */
 
 #import <Cordova/CDV.h>
 #import "CDVFile.h"
 #import "CDVLocalFilesystem.h"
 #import "CDVAssetLibraryFilesystem.h"
+#import <objc/message.h>
+
+static NSString* toBase64(NSData* data) {
+    SEL s1 = NSSelectorFromString(@"cdv_base64EncodedString");
+    SEL s2 = NSSelectorFromString(@"base64EncodedString");
+    SEL s3 = NSSelectorFromString(@"base64EncodedStringWithOptions:");
+    
+    if ([data respondsToSelector:s1]) {
+        NSString* (*func)(id, SEL) = (void *)[data methodForSelector:s1];
+        return func(data, s1);
+    } else if ([data respondsToSelector:s2]) {
+        NSString* (*func)(id, SEL) = (void *)[data methodForSelector:s2];
+        return func(data, s2);
+    } else if ([data respondsToSelector:s3]) {
+        NSString* (*func)(id, SEL, NSUInteger) = (void *)[data methodForSelector:s3];
+        return func(data, s3, 0);
+    } else {
+        return nil;
+    }
+}
 
 CDVFile *filePlugin = nil;
 
 extern NSString * const NSURLIsExcludedFromBackupKey __attribute__((weak_import));
 
 #ifndef __IPHONE_5_1
-NSString* const NSURLIsExcludedFromBackupKey = @"NSURLIsExcludedFromBackupKey";
+    NSString* const NSURLIsExcludedFromBackupKey = @"NSURLIsExcludedFromBackupKey";
 #endif
 
 NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
@@ -140,21 +160,21 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     CDVFilesystemURL* url = [CDVFilesystemURL fileSystemURLWithURL:[[self request] URL]];
     NSObject<CDVFileSystem> *fs = [filePlugin filesystemForURL:url];
     [fs readFileAtURL:url start:0 end:-1 callback:^void(NSData *data, NSString *mimetype, CDVFileError error) {
-            NSMutableDictionary* responseHeaders = [[NSMutableDictionary alloc] init];
-            responseHeaders[@"Cache-Control"] = @"no-cache";
+        NSMutableDictionary* responseHeaders = [[NSMutableDictionary alloc] init];
+        responseHeaders[@"Cache-Control"] = @"no-cache";
 
-            if (!error) {
-                responseHeaders[@"Content-Type"] = mimetype;
-                NSURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url.url statusCode:200 HTTPVersion:@"HTTP/1.1"headerFields:responseHeaders];
-                [[self client] URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
-                [[self client] URLProtocol:self didLoadData:data];
-                [[self client] URLProtocolDidFinishLoading:self];
-            } else {
-                NSURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url.url statusCode:404 HTTPVersion:@"HTTP/1.1"headerFields:responseHeaders];
-                [[self client] URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
-                [[self client] URLProtocolDidFinishLoading:self];
-            }
-        }];
+        if (!error) {
+            responseHeaders[@"Content-Type"] = mimetype;
+            NSURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url.url statusCode:200 HTTPVersion:@"HTTP/1.1"headerFields:responseHeaders];
+            [[self client] URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+            [[self client] URLProtocol:self didLoadData:data];
+            [[self client] URLProtocolDidFinishLoading:self];
+        } else {
+            NSURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url.url statusCode:404 HTTPVersion:@"HTTP/1.1"headerFields:responseHeaders];
+            [[self client] URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+            [[self client] URLProtocolDidFinishLoading:self];
+        }
+    }];
 }
 
 - (void)stopLoading
@@ -173,6 +193,24 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 @synthesize rootDocsPath, appDocsPath, appLibraryPath, appTempPath, userHasAllowed, fileSystems=fileSystems_;
 
 - (void)registerFilesystem:(NSObject<CDVFileSystem> *)fs {
+    __weak CDVFile* weakSelf = self;
+    SEL sel = NSSelectorFromString(@"urlTransformer");
+    // for backwards compatibility - we check if this property is there
+    // we create a wrapper block because the urlTransformer property
+    // on the commandDelegate might be set dynamically at a future time
+    // (and not dependent on plugin loading order)
+    if ([self.commandDelegate respondsToSelector:sel]) {
+        fs.urlTransformer = ^NSURL*(NSURL* urlToTransform) {
+            // grab the block from the commandDelegate
+            NSURL* (^urlTransformer)(NSURL*) = ((id(*)(id, SEL))objc_msgSend)(weakSelf.commandDelegate, sel);
+            // if block is not null, we call it
+            if (urlTransformer) {
+                return urlTransformer(urlToTransform);
+            } else { // else we return the same url
+                return urlToTransform;
+            }
+        };
+    }
     [fileSystems_ addObject:fs];
 }
 
@@ -215,9 +253,9 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 
 - (void)makeNonSyncable:(NSString*)path {
     [[NSFileManager defaultManager] createDirectoryAtPath:path
-                              withIntermediateDirectories:YES
-                                               attributes:nil
-                                                    error:nil];
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:nil];
     NSURL* url = [NSURL fileURLWithPath:path];
     [url setResourceValue: [NSNumber numberWithBool: YES]
                    forKey: NSURLIsExcludedFromBackupKey error:nil];
@@ -255,17 +293,35 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) objectAtIndex:0];
     return @{
         @"library": libPath,
-            @"library-nosync": [libPath stringByAppendingPathComponent:@"NoCloud"],
-            @"documents": docPath,
-            @"documents-nosync": [docPath stringByAppendingPathComponent:@"NoCloud"],
-            @"cache": [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0],
-            @"bundle": [[NSBundle mainBundle] bundlePath],
-            @"root": @"/"
-            };
+        @"library-nosync": [libPath stringByAppendingPathComponent:@"NoCloud"],
+        @"documents": docPath,
+        @"documents-nosync": [docPath stringByAppendingPathComponent:@"NoCloud"],
+        @"cache": [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) objectAtIndex:0],
+        @"bundle": [[NSBundle mainBundle] bundlePath],
+        @"root": @"/"
+    };
 }
 
 - (void)pluginInitialize
 {
+    filePlugin = self;
+    [NSURLProtocol registerClass:[CDVFilesystemURLProtocol class]];
+
+    fileSystems_ = [[NSMutableArray alloc] initWithCapacity:3];
+
+    // Get the Library directory path
+    NSArray* paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
+    self.appLibraryPath = [[paths objectAtIndex:0] stringByAppendingPathComponent:@"files"];
+
+    // Get the Temporary directory path
+    self.appTempPath = [NSTemporaryDirectory()stringByStandardizingPath];   // remove trailing slash from NSTemporaryDirectory()
+
+    // Get the Documents directory path
+    paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    self.rootDocsPath = [paths objectAtIndex:0];
+    self.appDocsPath = [self.rootDocsPath stringByAppendingPathComponent:@"files"];
+
+
     NSString *location = nil;
     if([self.viewController isKindOfClass:[CDVViewController class]]) {
         CDVViewController *vc = (CDVViewController *)self.viewController;
@@ -307,40 +363,13 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
         [self registerFilesystem:[[CDVLocalFilesystem alloc] initWithName:@"persistent" root:self.rootDocsPath]];
     } else {
         NSAssert(false,
-                 @"File plugin configuration error: Please set iosPersistentFileLocation in config.xml to one of \"library\" (for new applications) or \"compatibility\" (for compatibility with previous versions)");
+            @"File plugin configuration error: Please set iosPersistentFileLocation in config.xml to one of \"library\" (for new applications) or \"compatibility\" (for compatibility with previous versions)");
     }
     [self registerFilesystem:[[CDVAssetLibraryFilesystem alloc] initWithName:@"assets-library"]];
 
     [self registerExtraFileSystems:[self getExtraFileSystemsPreference:self.viewController]
                   fromAvailableSet:[self getAvailableFileSystems]];
 
-}
-
-
-- (id)initWithWebView:(UIWebView*)theWebView
-{
-    self = (CDVFile*)[super initWithWebView:theWebView];
-    if (self) {
-        filePlugin = self;
-        [NSURLProtocol registerClass:[CDVFilesystemURLProtocol class]];
-
-        fileSystems_ = [[NSMutableArray alloc] initWithCapacity:3];
-
-        // Get the Library directory path
-        NSArray* paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-        self.appLibraryPath = [[paths objectAtIndex:0] stringByAppendingPathComponent:@"files"];
-
-        // Get the Temporary directory path
-        self.appTempPath = [NSTemporaryDirectory()stringByStandardizingPath];   // remove trailing slash from NSTemporaryDirectory()
-
-        // Get the Documents directory path
-        paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        self.rootDocsPath = [paths objectAtIndex:0];
-        self.appDocsPath = [self.rootDocsPath stringByAppendingPathComponent:@"files"];
-
-    }
-
-    return self;
 }
 
 - (CDVFilesystemURL *)fileSystemURLforArg:(NSString *)urlArg
@@ -395,27 +424,25 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
  *
  * IN:
  * arguments[0] - type (number as string)
- *      TEMPORARY = 0, PERSISTENT = 1;
+ *	TEMPORARY = 0, PERSISTENT = 1;
  * arguments[1] - size
  *
  * OUT:
- *      Dictionary representing FileSystem object
- *              name - the human readable directory name
- *              root = DirectoryEntry object
- *                      bool isDirectory
- *                      bool isFile
- *                      string name
- *                      string fullPath
- *                      fileSystem = FileSystem object - !! ignored because creates circular reference !!
+ *	Dictionary representing FileSystem object
+ *		name - the human readable directory name
+ *		root = DirectoryEntry object
+ *			bool isDirectory
+ *			bool isFile
+ *			string name
+ *			string fullPath
+ *			fileSystem = FileSystem object - !! ignored because creates circular reference !!
  */
 
 - (void)requestFileSystem:(CDVInvokedUrlCommand*)command
 {
-    NSArray* arguments = command.arguments;
-
     // arguments
-    NSString* strType = [arguments objectAtIndex:0];
-    unsigned long long size = [[arguments objectAtIndex:1] longLongValue];
+    NSString* strType = [command argumentAtIndex:0];
+    unsigned long long size = [[command argumentAtIndex:1] longLongValue];
 
     int type = [strType intValue];
     CDVPluginResult* result = nil;
@@ -496,11 +523,11 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
  * BOOL isDirectory - YES if this is a directory, NO if is a file
  * OUT:
  * NSDictionary* Entry object
- *              bool as NSNumber isDirectory
- *              bool as NSNumber isFile
- *              NSString*  name - last part of path
- *              NSString* fullPath
- *              NSString* filesystemName - FileSystem name -- actual filesystem will be created on the JS side if necessary, to avoid
+ *		bool as NSNumber isDirectory
+ *		bool as NSNumber isFile
+ *		NSString*  name - last part of path
+ *		NSString* fullPath
+ *		NSString* filesystemName - FileSystem name -- actual filesystem will be created on the JS side if necessary, to avoid
  *         creating circular reference (FileSystem contains DirectoryEntry which contains FileSystem.....!!)
  */
 - (NSDictionary*)makeEntryForPath:(NSString*)fullPath fileSystemName:(NSString *)fsName isDirectory:(BOOL)isDir
@@ -524,24 +551,24 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 /*
  * Given a URI determine the File System information associated with it and return an appropriate W3C entry object
  * IN
- *      NSString* localURI: Should be an escaped local filesystem URI
+ *	NSString* localURI: Should be an escaped local filesystem URI
  * OUT
- *      Entry object
- *              bool isDirectory
- *              bool isFile
- *              string name
- *              string fullPath
- *              fileSystem = FileSystem object - !! ignored because creates circular reference FileSystem contains DirectoryEntry which contains FileSystem.....!!
+ *	Entry object
+ *		bool isDirectory
+ *		bool isFile
+ *		string name
+ *		string fullPath
+ *		fileSystem = FileSystem object - !! ignored because creates circular reference FileSystem contains DirectoryEntry which contains FileSystem.....!!
  */
 - (void)resolveLocalFileSystemURI:(CDVInvokedUrlCommand*)command
 {
     // arguments
-    NSString* localURIstr = [command.arguments objectAtIndex:0];
+    NSString* localURIstr = [command argumentAtIndex:0];
     CDVPluginResult* result;
-
+    
     localURIstr = [self encodePath:localURIstr]; //encode path before resolving
     CDVFilesystemURL* inputURI = [self fileSystemURLforArg:localURIstr];
-
+    
     if (inputURI == nil || inputURI.fileSystemName == nil) {
         result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsInt:ENCODING_ERR];
     } else {
@@ -565,16 +592,16 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 
 /* Part of DirectoryEntry interface,  creates or returns the specified directory
  * IN:
- *      NSString* localURI - local filesystem URI for this directory
- *      NSString* path - directory to be created/returned; may be full path or relative path
- *      NSDictionary* - Flags object
- *              boolean as NSNumber create -
- *                      if create is true and directory does not exist, create dir and return directory entry
- *                      if create is true and exclusive is true and directory does exist, return error
- *                      if create is false and directory does not exist, return error
- *                      if create is false and the path represents a file, return error
- *              boolean as NSNumber exclusive - used in conjunction with create
- *                      if exclusive is true and create is true - specifies failure if directory already exists
+ *	NSString* localURI - local filesystem URI for this directory
+ *	NSString* path - directory to be created/returned; may be full path or relative path
+ *	NSDictionary* - Flags object
+ *		boolean as NSNumber create -
+ *			if create is true and directory does not exist, create dir and return directory entry
+ *			if create is true and exclusive is true and directory does exist, return error
+ *			if create is false and directory does not exist, return error
+ *			if create is false and the path represents a file, return error
+ *		boolean as NSNumber exclusive - used in conjunction with create
+ *			if exclusive is true and create is true - specifies failure if directory already exists
  *
  *
  */
@@ -584,7 +611,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSMutableDictionary* options = nil;
 
     if ([arguments count] >= 3) {
-        options = [arguments objectAtIndex:2 withDefault:nil];
+        options = [command argumentAtIndex:2 withDefault:nil];
     }
     // add getDir to options and call getFile()
     if (options != nil) {
@@ -609,23 +636,23 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 
 /* Part of DirectoryEntry interface,  creates or returns the specified file
  * IN:
- *      NSString* baseURI - local filesytem URI for the base directory to search
- *      NSString* requestedPath - file to be created/returned; may be absolute path or relative path
- *      NSDictionary* options - Flags object
- *              boolean as NSNumber create -
- *                      if create is true and file does not exist, create file and return File entry
- *                      if create is true and exclusive is true and file does exist, return error
- *                      if create is false and file does not exist, return error
- *                      if create is false and the path represents a directory, return error
- *              boolean as NSNumber exclusive - used in conjunction with create
- *                      if exclusive is true and create is true - specifies failure if file already exists
+ *	NSString* baseURI - local filesytem URI for the base directory to search
+ *	NSString* requestedPath - file to be created/returned; may be absolute path or relative path
+ *	NSDictionary* options - Flags object
+ *		boolean as NSNumber create -
+ *			if create is true and file does not exist, create file and return File entry
+ *			if create is true and exclusive is true and file does exist, return error
+ *			if create is false and file does not exist, return error
+ *			if create is false and the path represents a directory, return error
+ *		boolean as NSNumber exclusive - used in conjunction with create
+ *			if exclusive is true and create is true - specifies failure if file already exists
  */
 - (void)getFile:(CDVInvokedUrlCommand*)command
 {
-    NSString* baseURIstr = [command.arguments objectAtIndex:0];
+    NSString* baseURIstr = [command argumentAtIndex:0];
     CDVFilesystemURL* baseURI = [self fileSystemURLforArg:baseURIstr];
-    NSString* requestedPath = [command.arguments objectAtIndex:1];
-    NSDictionary* options = [command.arguments objectAtIndex:2 withDefault:nil];
+    NSString* requestedPath = [command argumentAtIndex:1];
+    NSDictionary* options = [command argumentAtIndex:2 withDefault:nil];
 
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:baseURI];
     CDVPluginResult* result = [fs getFileForURL:baseURI requestedPath:requestedPath options:options];
@@ -639,9 +666,9 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
  * If this Entry is the root of its filesystem, its parent is itself.
  * IN:
  * NSArray* arguments
- *      0 - NSString* localURI
+ *	0 - NSString* localURI
  * NSMutableDictionary* options
- *      empty
+ *	empty
  */
 - (void)getParent:(CDVInvokedUrlCommand*)command
 {
@@ -662,7 +689,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 {
     // arguments
     CDVFilesystemURL* localURI = [self fileSystemURLforArg:command.arguments[0]];
-    NSDictionary* options = [command.arguments objectAtIndex:1 withDefault:nil];
+    NSDictionary* options = [command argumentAtIndex:1 withDefault:nil];
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
     CDVPluginResult* result = [fs setMetadataForURL:localURI withObject:options];
 
@@ -672,12 +699,12 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 /* removes the directory or file entry
  * IN:
  * NSArray* arguments
- *      0 - NSString* localURI
+ *	0 - NSString* localURI
  *
  * returns NO_MODIFICATION_ALLOWED_ERR  if is top level directory or no permission to delete dir
  * returns INVALID_MODIFICATION_ERR if is non-empty dir or asset library file
  * returns NOT_FOUND_ERR if file or dir is not found
- */
+*/
 - (void)remove:(CDVInvokedUrlCommand*)command
 {
     // arguments
@@ -697,7 +724,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 /* recursively removes the directory
  * IN:
  * NSArray* arguments
- *      0 - NSString* localURI
+ *	0 - NSString* localURI
  *
  * returns NO_MODIFICATION_ALLOWED_ERR  if is top level directory or no permission to delete dir
  * returns NOT_FOUND_ERR if file or dir is not found
@@ -731,18 +758,18 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 /* Copy/move a file or directory to a new location
  * IN:
  * NSArray* arguments
- *      0 - NSString* URL of entry to copy
+ *	0 - NSString* URL of entry to copy
  *  1 - NSString* URL of the directory into which to copy/move the entry
  *  2 - Optionally, the new name of the entry, defaults to the current name
- *      BOOL - bCopy YES if copy, NO if move
+ *	BOOL - bCopy YES if copy, NO if move
  */
 - (void)doCopyMove:(CDVInvokedUrlCommand*)command isCopy:(BOOL)bCopy
 {
     NSArray* arguments = command.arguments;
 
     // arguments
-    NSString* srcURLstr = [arguments objectAtIndex:0];
-    NSString* destURLstr = [arguments objectAtIndex:1];
+    NSString* srcURLstr = [command argumentAtIndex:0];
+    NSString* destURLstr = [command argumentAtIndex:1];
 
     CDVPluginResult *result;
 
@@ -760,7 +787,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSObject<CDVFileSystem> *destFs = [self filesystemForURL:destURL];
 
     // optional argument; use last component from srcFullPath if new name not provided
-    NSString* newName = ([arguments count] > 2) ? [arguments objectAtIndex:2] : [srcURL.url lastPathComponent];
+    NSString* newName = ([arguments count] > 2) ? [command argumentAtIndex:2] : [srcURL.url lastPathComponent];
     if ([newName rangeOfString:@":"].location != NSNotFound) {
         // invalid chars in new name
         result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:ENCODING_ERR];
@@ -769,8 +796,8 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     }
 
     [destFs copyFileToURL:destURL withName:newName fromFileSystem:srcFs atURL:srcURL copy:bCopy callback:^(CDVPluginResult* result) {
-            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-        }];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
 
 }
 
@@ -781,8 +808,8 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
 
     [fs getFileMetadataForURL:localURI callback:^(CDVPluginResult* result) {
-            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-        }];
+        [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
+    }];
 }
 
 - (void)readEntries:(CDVInvokedUrlCommand*)command
@@ -797,10 +824,10 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 /* read and return file data
  * IN:
  * NSArray* arguments
- *      0 - NSString* fullPath
- *      1 - NSString* encoding
- *      2 - NSString* start
- *      3 - NSString* end
+ *	0 - NSString* fullPath
+ *	1 - NSString* encoding
+ *	2 - NSString* start
+ *	3 - NSString* end
  */
 - (void)readAsText:(CDVInvokedUrlCommand*)command
 {
@@ -811,7 +838,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSInteger end = [[command argumentAtIndex:3] integerValue];
 
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
-
+    
     if (fs == nil) {
         CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:NOT_FOUND_ERR];
         [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
@@ -827,33 +854,33 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     }
 
     [self.commandDelegate runInBackground:^ {
-            [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
-                    CDVPluginResult* result = nil;
-                    if (data != nil) {
-                        NSString* str = [[NSString alloc] initWithBytesNoCopy:(void*)[data bytes] length:[data length] encoding:NSUTF8StringEncoding freeWhenDone:NO];
-                        // Check that UTF8 conversion did not fail.
-                        if (str != nil) {
-                            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:str];
-                            result.associatedObject = data;
-                        } else {
-                            errorCode = ENCODING_ERR;
-                        }
-                    }
-                    if (result == nil) {
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
-                    }
+        [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
+            CDVPluginResult* result = nil;
+            if (data != nil) {
+                NSString* str = [[NSString alloc] initWithBytesNoCopy:(void*)[data bytes] length:[data length] encoding:NSUTF8StringEncoding freeWhenDone:NO];
+                // Check that UTF8 conversion did not fail.
+                if (str != nil) {
+                    result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:str];
+                    result.associatedObject = data;
+                } else {
+                    errorCode = ENCODING_ERR;
+                }
+            }
+            if (result == nil) {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
+            }
 
-                    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-                }];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }];
+    }];
 }
 
 /* Read content of text file and return as base64 encoded data url.
  * IN:
  * NSArray* arguments
- *      0 - NSString* fullPath
- *      1 - NSString* start
- *      2 - NSString* end
+ *	0 - NSString* fullPath
+ *	1 - NSString* start
+ *	2 - NSString* end
  *
  * Determines the mime type from the file extension, returns ENCODING_ERR if mimetype can not be determined.
  */
@@ -867,27 +894,27 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
 
     [self.commandDelegate runInBackground:^ {
-            [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
-                    CDVPluginResult* result = nil;
-                    if (data != nil) {
-                        // TODO: Would be faster to base64 encode directly to the final string.
-                        NSString* output = [NSString stringWithFormat:@"data:%@;base64,%@", mimeType, [data base64EncodedString]];
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:output];
-                    } else {
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
-                    }
+        [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
+            CDVPluginResult* result = nil;
+            if (data != nil) {
+                NSString* b64Str = toBase64(data);
+                NSString* output = [NSString stringWithFormat:@"data:%@;base64,%@", mimeType, b64Str];
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:output];
+            } else {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
+            }
 
-                    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-                }];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }];
+    }];
 }
 
 /* Read content of text file and return as an arraybuffer
  * IN:
  * NSArray* arguments
- *      0 - NSString* fullPath
- *      1 - NSString* start
- *      2 - NSString* end
+ *	0 - NSString* fullPath
+ *	1 - NSString* start
+ *	2 - NSString* end
  */
 
 - (void)readAsArrayBuffer:(CDVInvokedUrlCommand*)command
@@ -899,17 +926,17 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
 
     [self.commandDelegate runInBackground:^ {
-            [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
-                    CDVPluginResult* result = nil;
-                    if (data != nil) {
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArrayBuffer:data];
-                    } else {
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
-                    }
+        [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
+            CDVPluginResult* result = nil;
+            if (data != nil) {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArrayBuffer:data];
+            } else {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
+            }
 
-                    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-                }];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }];
+    }];
 }
 
 - (void)readAsBinaryString:(CDVInvokedUrlCommand*)command
@@ -921,19 +948,19 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
 
     [self.commandDelegate runInBackground:^ {
-            [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
-                    CDVPluginResult* result = nil;
-                    if (data != nil) {
-                        NSString* payload = [[NSString alloc] initWithBytesNoCopy:(void*)[data bytes] length:[data length] encoding:NSASCIIStringEncoding freeWhenDone:NO];
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:payload];
-                        result.associatedObject = data;
-                    } else {
-                        result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
-                    }
+        [fs readFileAtURL:localURI start:start end:end callback:^(NSData* data, NSString* mimeType, CDVFileError errorCode) {
+            CDVPluginResult* result = nil;
+            if (data != nil) {
+                NSString* payload = [[NSString alloc] initWithBytesNoCopy:(void*)[data bytes] length:[data length] encoding:NSASCIIStringEncoding freeWhenDone:NO];
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:payload];
+                result.associatedObject = data;
+            } else {
+                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_IO_EXCEPTION messageAsInt:errorCode];
+            }
 
-                    [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-                }];
+            [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
         }];
+    }];
 }
 
 
@@ -941,7 +968,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 {
     // arguments
     CDVFilesystemURL* localURI = [self fileSystemURLforArg:command.arguments[0]];
-    unsigned long long pos = (unsigned long long)[[command.arguments objectAtIndex:1] longLongValue];
+    unsigned long long pos = (unsigned long long)[[command argumentAtIndex:1] longLongValue];
 
     NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
     CDVPluginResult *result = [fs truncateFileAtURL:localURI atPosition:pos];
@@ -959,29 +986,28 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 - (void)write:(CDVInvokedUrlCommand*)command
 {
     [self.commandDelegate runInBackground:^ {
-            NSString* callbackId = command.callbackId;
-            NSArray* arguments = command.arguments;
+        NSString* callbackId = command.callbackId;
 
-            // arguments
-            CDVFilesystemURL* localURI = [self fileSystemURLforArg:command.arguments[0]];
-            id argData = [arguments objectAtIndex:1];
-            unsigned long long pos = (unsigned long long)[[arguments objectAtIndex:2] longLongValue];
+        // arguments
+        CDVFilesystemURL* localURI = [self fileSystemURLforArg:command.arguments[0]];
+        id argData = [command argumentAtIndex:1];
+        unsigned long long pos = (unsigned long long)[[command argumentAtIndex:2] longLongValue];
 
-            NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
+        NSObject<CDVFileSystem> *fs = [self filesystemForURL:localURI];
 
 
-            [fs truncateFileAtURL:localURI atPosition:pos];
-            CDVPluginResult *result;
-            if ([argData isKindOfClass:[NSString class]]) {
-                NSData *encData = [argData dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:YES];
-                result = [fs writeToFileAtURL:localURI withData:encData append:YES];
-            } else if ([argData isKindOfClass:[NSData class]]) {
-                result = [fs writeToFileAtURL:localURI withData:argData append:YES];
-            } else {
-                result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Invalid parameter type"];
-            }
-            [self.commandDelegate sendPluginResult:result callbackId:callbackId];
-        }];
+        [fs truncateFileAtURL:localURI atPosition:pos];
+        CDVPluginResult *result;
+        if ([argData isKindOfClass:[NSString class]]) {
+            NSData *encData = [argData dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:YES];
+            result = [fs writeToFileAtURL:localURI withData:encData append:YES];
+        } else if ([argData isKindOfClass:[NSData class]]) {
+            result = [fs writeToFileAtURL:localURI withData:argData append:YES];
+        } else {
+            result = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Invalid parameter type"];
+        }
+        [self.commandDelegate sendPluginResult:result callbackId:callbackId];
+    }];
 }
 
 #pragma mark Methods for converting between URLs and paths
@@ -1003,7 +1029,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 - (void)testFileExists:(CDVInvokedUrlCommand*)command
 {
     // arguments
-    NSString* argPath = [command.arguments objectAtIndex:0];
+    NSString* argPath = [command argumentAtIndex:0];
 
     // Get the file manager
     NSFileManager* fMgr = [NSFileManager defaultManager];
@@ -1018,7 +1044,7 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 - (void)testDirectoryExists:(CDVInvokedUrlCommand*)command
 {
     // arguments
-    NSString* argPath = [command.arguments objectAtIndex:0];
+    NSString* argPath = [command argumentAtIndex:0];
 
     // Get the file manager
     NSFileManager* fMgr = [[NSFileManager alloc] init];
@@ -1034,29 +1060,16 @@ NSString* const kCDVFilesystemURLPrefix = @"cdvfile";
 // Returns number of bytes available via callback
 - (void)getFreeDiskSpace:(CDVInvokedUrlCommand*)command
 {
-    uint64_t totalSpace = 0;
-    uint64_t totalFreeSpace = 0;
-    NSError *error = nil;
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSDictionary *dictionary = [[NSFileManager defaultManager] attributesOfFileSystemForPath:[paths lastObject] error: &error];
+    // no arguments
 
-    if (dictionary) {
-        NSNumber *fileSystemSizeInBytes = [dictionary objectForKey: NSFileSystemSize];
-        NSNumber *freeFileSystemSizeInBytes = [dictionary objectForKey:NSFileSystemFreeSize];
-        totalSpace = [fileSystemSizeInBytes unsignedLongLongValue];
-        totalFreeSpace = [freeFileSystemSizeInBytes unsignedLongLongValue];
-        NSLog(@"Memory Capacity of %llu MiB with %llu MiB Free memory available.", ((totalSpace/1024ll)/1024ll), ((totalFreeSpace/1024ll)/1024ll));
-    } else {
-        //NSLog(@"Error Obtaining System Memory Info: Domain = %@, Code = %@", [error domain], [error code]);
-        NSLog(@"Error Obtaining System Memory Info");
-    }
-    NSString* strFreeSpace = [NSString stringWithFormat:@"%llu", totalFreeSpace];
+    NSNumber* pNumAvail = [self checkFreeDiskSpace:self.appDocsPath];
+
+    NSString* strFreeSpace = [NSString stringWithFormat:@"%qu", [pNumAvail unsignedLongLongValue]];
+    // NSLog(@"Free space is %@", strFreeSpace );
+
     CDVPluginResult* result = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsString:strFreeSpace];
 
     [self.commandDelegate sendPluginResult:result callbackId:command.callbackId];
-
-    //return totalFreeSpace;
-
 }
 
 #pragma mark Compatibility with older File API

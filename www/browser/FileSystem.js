@@ -28,3 +28,4 @@ module.exports = {
         return (FILESYSTEM_PREFIX + this.name + (fullPath[0] === '/' ? '' : '/') + encodeURI(fullPath));
     }
 };
+

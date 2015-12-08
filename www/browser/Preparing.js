@@ -185,4 +185,3 @@ channel.onCordovaReady.subscribe(function () {
 
     dispatchEventIfReady();
 }, false);
-
